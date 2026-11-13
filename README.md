@@ -1,234 +1,181 @@
 # Inuka Africa — Loan Repayment Tracker
 
-A web-based loan repayment tracking application developed as part of the **Inuka Africa Software Development Internship Technical Assessment**.
+A web-based loan repayment tracker developed for the **Inuka Africa Software Development Internship Technical Assessment**. An authorized staff user can register clients, create loans, record repayments, and inspect loan balances and repayment history.
 
-The application allows an authorized staff user to register clients, create loans, record repayments, and view loan balances and repayment histories.
+**Live demo:** https://inuka-loan-tracker.pages.dev/  
+**Source code:** https://github.com/JuniorCarti/inuka-loan-tracker
 
-The solution prioritizes **financial accuracy, database integrity, secure access, and reliable repayment processing**.
+> **Assessment demo:** The website is publicly reachable, but loan-management operations require authorized staff authentication. Use fictional client and loan data. Demo credentials are not published.
 
 ## 1. Features
 
-### Client Registration
-- Register clients using a unique client number and name.
-- Store client information in PostgreSQL.
-- Prevent duplicate client numbers.
-
-### Loan Management
-- Create loans associated with registered clients.
-- Assign a unique loan reference.
-- Record the principal and total amount due in Kenyan shillings (KES).
-- Track total repayments and outstanding balances.
-
-### Repayment Processing
-- Record repayments against existing loans.
-- Require a unique payment reference, positive amount, and payment date.
-- Reject duplicate payment references.
-- Prevent repayments exceeding the outstanding loan balance.
-- Reject repayments against nonexistent loans.
-- Maintain a repayment history for each loan.
-
-### Loan Summary
-- View the associated client and loan reference.
-- View the original amount due.
-- View the total amount repaid.
-- View the remaining outstanding balance.
-- Review recorded repayments.
+- **Client registration:** Register a borrower with a unique client number and name.
+- **Loan creation:** Associate a loan with a client, assign a unique loan reference, and specify principal and total due in KES.
+- **Repayment recording:** Submit a positive amount, unique payment reference, and payment date against an existing loan.
+- **Financial safeguards:** Reject duplicate payment references, overpayments, invalid amounts, and nonexistent loans.
+- **Loan summary:** Display total due, total repaid, outstanding balance, and repayment history.
+- **Staff access:** Sign in through Supabase Auth; the Edge Function checks the configured authorized staff user.
 
 ## 2. Technology Stack
 
-| Component | Technology |
-|---|---|
-| Frontend | React, TypeScript, Vite |
-| Backend API | Supabase Edge Functions (Deno) |
-| Database | PostgreSQL (Supabase) |
-| Authentication | Supabase Auth |
-| Input validation | Zod |
-| Automated testing | Vitest |
-| Source control | Git and GitHub |
+| Layer | Technology | Hosting |
+| --- | --- | --- |
+| Frontend | React, TypeScript, Vite | Cloudflare Pages |
+| Backend API | Supabase Edge Functions (Deno) | Supabase |
+| Database | PostgreSQL | Supabase |
+| Authentication | Supabase Auth | Supabase |
+| Validation | Zod and PostgreSQL constraints | Backend and database |
+| Automated testing | Vitest integration tests | Run from development environment |
+| Source control | Git | GitHub |
 
-## 3. System Architecture
+## 3. Live Deployment and Architecture
 
-The application follows a client-server architecture:
+The React application is deployed on **Cloudflare Pages** and communicates over HTTPS with the already deployed Supabase Edge Function, `loan-api`. The Edge Function validates requests, authenticates and authorizes the staff user, and performs database operations. Repayments use a PostgreSQL function to enforce financial integrity within a transaction.
 
 ```text
-React + TypeScript Frontend
-            |
-            | Authenticated HTTPS requests
-            v
-Supabase Edge Function (loan-api)
-            |
-            | Validate input and staff authorization
-            v
-PostgreSQL Database
-            |
-            | Atomic repayment function
-            v
-Clients / Loans / Repayments
+Browser
+  |
+  v
+Cloudflare Pages (React + Vite)
+https://inuka-loan-tracker.pages.dev/
+  |
+  | HTTPS requests with Supabase Auth session
+  v
+Supabase Edge Function: loan-api
+  |  Input validation + authorized-staff check
+  v
+Supabase PostgreSQL
+  |-- public.clients
+  |-- public.loans
+  |-- public.repayments
+  `-- public.record_repayment(...) [atomic transaction]
 ```
 
-The frontend does not directly modify financial records.
+The frontend uses only a **public Supabase publishable key**. The service-role credential remains server-side and must never be included in frontend environment variables or committed to Git.
 
-Instead, financial operations are handled by the backend, which validates requests and communicates with PostgreSQL.
+### Cloudflare Pages configuration
+
+The frontend was deployed using GitHub integration with these settings:
+
+| Setting | Value |
+| --- | --- |
+| GitHub repository | `JuniorCarti/inuka-loan-tracker` |
+| Production branch | `main` |
+| Framework preset | React (Vite) |
+| Root directory | Repository root |
+| Build command | `npm run build` |
+| Build output directory | `dist` |
+| Production URL | https://inuka-loan-tracker.pages.dev/ |
+
+**Cloudflare Pages build environment variables:**
+
+```dotenv
+VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=YOUR_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+```
+
+The real values are configured in the Cloudflare Pages project settings and are **not** stored in the repository. Vite embeds variables prefixed `VITE_` into the browser bundle at build time; do not put secrets in them.
+
+### Deployment workflow
+
+1. Push changes to the `main` branch on GitHub.
+2. Cloudflare Pages builds the frontend with `npm run build` and publishes `dist`.
+3. The published frontend connects to the existing Supabase Auth service and `loan-api` Edge Function.
+4. Database migrations and Edge Function changes are deployed separately through the Supabase CLI; a frontend redeploy does **not** automatically deploy backend changes.
+5. After deployment, verify staff sign-in and the loan repayment workflow using fictional data.
+
+The live application was manually checked after deployment, including authenticated access and the loan repayment workflow. This is a functional demo, not a production-certified financial service.
 
 ## 4. Database Design
 
-The database contains three main tables.
+Three tables model the core domain:
 
-### clients
+### `public.clients`
 
-Stores registered borrowers.
+| Column | Purpose |
+| --- | --- |
+| `id` | UUID primary key |
+| `client_number` | Unique client identifier |
+| `name` | Borrower name |
 
-| Column | Description |
-|---|---|
-| id | UUID primary key |
-| client_number | Unique client identifier |
-| name | Client name |
+### `public.loans`
 
-### loans
+| Column | Purpose |
+| --- | --- |
+| `id` | UUID primary key |
+| `client_id` | Foreign key to `clients` |
+| `loan_reference` | Unique loan reference |
+| `principal_cents` | Original principal |
+| `total_due_cents` | Total payable amount |
+| `total_repaid_cents` | Sum of accepted repayments |
 
-Stores loans associated with clients.
+### `public.repayments`
 
-| Column | Description |
-|---|---|
-| id | UUID primary key |
-| client_id | Foreign key referencing clients |
-| loan_reference | Unique loan reference |
-| principal_cents | Original principal |
-| total_due_cents | Total amount payable |
-| total_repaid_cents | Total repayments recorded |
+| Column | Purpose |
+| --- | --- |
+| `id` | UUID primary key |
+| `loan_id` | Foreign key to `loans` |
+| `payment_reference` | Unique payment identifier |
+| `amount_cents` | Accepted repayment amount |
+| `payment_date` | Date of repayment |
 
-### repayments
+A client may have many loans; a loan may have many repayments. Foreign keys enforce relationships, unique indexes prevent duplicate business references, and check constraints enforce valid financial values. The schema and function definitions are versioned in `supabase/migrations/`.
 
-Stores individual loan repayments.
+### Money representation
 
-| Column | Description |
-|---|---|
-| id | UUID primary key |
-| loan_id | Foreign key referencing loans |
-| payment_reference | Unique payment reference |
-| amount_cents | Repayment amount |
-| payment_date | Date of repayment |
+Amounts are stored as **integer cents**, avoiding floating-point arithmetic for persisted monetary values.
 
-### Relationships
-
-```text
-clients (1)
-    |
-    | One client can have many loans
-    v
-loans (many)
-    |
-    | One loan can have many repayments
-    v
-repayments (many)
-```
-
-Foreign keys preserve relationships between records.
-
-Unique constraints and indexes prevent duplicate business identifiers.
-
-Check constraints enforce important financial rules.
-
-### Monetary Representation
-
-Financial amounts are stored as **integer cents**, rather than floating-point numbers.
-
-For example:
-
-| Amount in KES | Stored value |
-|---|---:|
+| Displayed amount | Stored integer |
+| --- | ---: |
 | KES 1,000.00 | 100000 |
 | KES 3,000.00 | 300000 |
 | KES 10,000.00 | 1000000 |
 
-This avoids floating-point rounding problems when calculating repayments and outstanding balances.
-
 ## 5. Repayment Business Logic
 
-The outstanding loan balance is calculated as:
-
 ```text
-Outstanding Balance = Total Amount Due - Total Amount Repaid
-```
-
-### Example
-
-A client has a loan with:
-
-- Total amount due: KES 10,000
-- Repayment received: KES 3,000
-
-The outstanding balance becomes:
-
-```text
+Outstanding balance = Total amount due - Total amount repaid
 KES 10,000 - KES 3,000 = KES 7,000
 ```
 
-### Validation Rules
+The backend validates the loan identifier, payment reference, positive repayment amount, and payment date. The database also checks that the loan exists and that the payment will not exceed the remaining balance.
 
-Before accepting a repayment, the system checks that:
+Repayments are recorded through `public.record_repayment(...)`, which:
 
-1. The loan exists.
-2. The payment reference is valid and unique.
-3. The repayment amount is greater than zero.
-4. The repayment amount does not exceed the outstanding balance.
-5. The payment date is valid.
-
-If a validation or database operation fails, the repayment transaction is rejected.
-
-### Atomic Repayment Processing
-
-Repayments are processed through the PostgreSQL function:
-
-`public.record_repayment`
-
-The function performs the following operations within a single database transaction:
-
-1. Validates the repayment details.
-2. Locks the relevant loan record using `SELECT ... FOR UPDATE`.
-3. Checks the outstanding balance.
+1. Validates the submitted repayment details.
+2. Locks the loan row using `SELECT ... FOR UPDATE`.
+3. Checks the outstanding amount.
 4. Inserts the repayment record.
-5. Updates the loan's total repaid amount.
+5. Updates `total_repaid_cents` on the loan.
 
-This design prevents concurrent repayment requests from independently spending the same outstanding balance.
+These steps execute in one PostgreSQL transaction. A failed insert or validation rolls back the transaction, preventing a repayment history entry and the loan total from diverging. Row locking serializes concurrent updates to the same loan; uniqueness constraints protect payment references.
 
-If an operation fails, PostgreSQL rolls back the transaction so that the repayment record and loan balance remain consistent.
+## 6. Authentication and Security
 
-Database uniqueness constraints also protect against duplicate payment references.
+- Staff sign-in uses Supabase Auth.
+- The `loan-api` Edge Function validates the user session and checks it against the configured `STAFF_USER_ID`.
+- Zod validates API inputs; PostgreSQL constraints provide additional enforcement.
+- Row Level Security is enabled on the financial tables, and direct anonymous/authenticated table access is restricted.
+- Service-role access is limited to the backend, not the browser.
+- Local credentials and Supabase CLI temporary files are excluded by `.gitignore`.
+- The public deployment does not expose a shared staff password.
 
-## 6. Security Design
+**Scope limitation:** The current implementation authorizes a single configured staff account. It is intended for assessment demonstration and would need a more complete permissions model, audit trail, operational controls, and security review before use with real borrowers.
 
-The application uses several security measures:
-
-- Staff authentication through Supabase Auth.
-- Server-side authorization for access to the loan API.
-- Input validation using Zod.
-- Row Level Security enabled on financial tables.
-- Direct anonymous and authenticated access to financial tables restricted.
-- Service-role credentials kept on the backend, not in the frontend.
-- Repayment processing performed through a controlled PostgreSQL function.
-- Database constraints as an additional layer of protection.
-
-The current implementation is intended as a technical assessment prototype, not a production-ready multi-user microfinance platform.
-
-## 7. Project Structure
+## 7. Repository Structure
 
 ```text
 inuka-loan-tracker/
 ├── public/
 ├── src/
-│   ├── lib/
-│   │   └── supabase.ts
+│   ├── lib/supabase.ts
 │   ├── App.tsx
 │   └── main.tsx
 ├── supabase/
-│   ├── functions/
-│   │   └── loan-api/
-│   │       └── index.ts
-│   ├── migrations/
-│   └── config.toml
-├── tests/
-│   └── loan-api.integration.test.ts
+│   ├── config.toml
+│   ├── functions/loan-api/index.ts
+│   └── migrations/
+├── tests/loan-api.integration.test.ts
 ├── .gitignore
 ├── package.json
 ├── vite.config.ts
@@ -236,209 +183,129 @@ inuka-loan-tracker/
 └── README.md
 ```
 
-## 8. Local Setup
+## 8. Run Locally
 
 ### Prerequisites
 
 - Node.js and npm
 - A Supabase project
-- Supabase CLI access
-- An authorized test staff account
+- Supabase CLI access for database/function deployment
+- A Supabase Auth user authorized as the test staff account
 
-### Install Dependencies
-
-Clone the repository and install dependencies:
+### Clone and install
 
 ```bash
-git clone <REPOSITORY_URL>
+git clone https://github.com/JuniorCarti/inuka-loan-tracker.git
 cd inuka-loan-tracker
 npm install
 ```
 
-### Configure Frontend Environment Variables
+### Frontend configuration
 
-Create a `.env.local` file in the project root:
+Create `.env.local` in the repository root:
 
 ```dotenv
 VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
-VITE_SUPABASE_PUBLISHABLE_KEY=YOUR_SUPABASE_PUBLISHABLE_KEY
+VITE_SUPABASE_PUBLISHABLE_KEY=YOUR_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 ```
 
-Use the public/publishable key for the frontend.
+Use the publishable key from the **same Supabase project** as the URL. Never put the service-role key in a `VITE_` variable.
 
-Never place the Supabase service-role key in a `VITE_` environment variable.
+### Database and backend setup
 
-### Database Setup
-
-Link the Supabase CLI to your project:
+For a **new Supabase project**, link the CLI and apply the included migrations:
 
 ```bash
 npx supabase login
 npx supabase link --project-ref YOUR_PROJECT_REF
-```
-
-Apply the included database migrations:
-
-```bash
 npx supabase db push --remote
 ```
 
-These migrations create the application tables, constraints, indexes, access restrictions, and repayment-processing function.
+Configure the Edge Function's server-side environment, including `STAFF_USER_ID` (the authorized Supabase Auth user's UUID). The function also uses Supabase-provided backend URL and service-role credentials. Configure these securely through Supabase; do not add them to Git.
 
-### Backend Configuration
-
-The Edge Function requires the following server-side configuration:
-
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
-- `STAFF_USER_ID`
-
-`STAFF_USER_ID` identifies the authorized Supabase Auth user for this assessment.
-
-Configure the required backend environment variables securely in Supabase. Do not commit credentials to Git.
-
-Deploy the Edge Function:
+Deploy the function to the linked project:
 
 ```bash
 npx supabase functions deploy loan-api
 ```
 
-Ensure the deployment's authentication configuration matches the application's Supabase project and API key setup.
+Ensure the function's JWT verification settings are consistent with the project's authentication configuration. If the function or schema has already been deployed, do not reapply changes unnecessarily.
 
-### Start the Frontend
+### Start the application
 
 ```bash
 npm run dev
 ```
 
-Open the local address displayed by Vite, normally:
+Open the local Vite URL (typically `http://localhost:5173`) and sign in with the authorized staff account.
 
-`http://localhost:5173`
+## 9. Automated Integration Tests
 
-Sign in using the configured authorized staff account.
+The Vitest suite calls the deployed Supabase Edge Function and checks persisted PostgreSQL results. It does **not** mock repayment processing.
 
-## 9. Automated Testing
-
-Automated integration tests are implemented using Vitest.
-
-The tests exercise the deployed Edge Function and PostgreSQL database rather than mocking the repayment logic.
-
-### Test Cases
-
-**Test 1 — Repayment Calculation**
-
-Given a loan with KES 10,000 due, when a repayment of KES 3,000 is recorded, the outstanding balance must be KES 7,000.
-
-**Test 2 — Duplicate Payment Reference**
-
-When the same payment reference is submitted twice, the second request must be rejected and the repayment must not be recorded twice.
-
-**Test 3 — Overpayment Prevention**
-
-Given a loan with KES 1,000 outstanding, a repayment of KES 1,500 must be rejected without changing the loan balance.
-
-### Configure Test Environment
+| Test | Expected result |
+| --- | --- |
+| Repay KES 3,000 against KES 10,000 due | KES 7,000 outstanding |
+| Submit the same payment reference twice | Second request rejected; one repayment recorded |
+| Repay KES 1,500 against KES 1,000 outstanding | Rejected; balance remains unchanged |
 
 Create `.env.test.local`:
 
 ```dotenv
 SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
-SUPABASE_ANON_KEY=YOUR_SUPABASE_PUBLISHABLE_KEY
+SUPABASE_ANON_KEY=YOUR_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 TEST_STAFF_EMAIL=YOUR_AUTHORIZED_TEST_EMAIL
-TEST_STAFF_PASSWORD=YOUR_TEST_PASSWORD
+TEST_STAFF_PASSWORD=YOUR_TEST_STAFF_PASSWORD
 ```
 
-Use a dedicated test Supabase project when possible.
+The test file signs in as the authorized staff user. Use a dedicated test project where possible: **tests create fictional clients, loans, and repayments and do not automatically remove them**.
 
-These tests create fictional clients, loans, and repayment records in the connected database.
-
-### Run Tests
+Run:
 
 ```bash
 npx vitest run tests/loan-api.integration.test.ts --mode test
 ```
 
-### Verified Test Result
-
-The following result was obtained during development:
+Verified result during development:
 
 ```text
 Test Files  1 passed (1)
 Tests       3 passed (3)
 ```
 
-All three required repayment scenarios passed against the deployed Supabase backend.
-
-## 10. Code Quality Checks
-
-Run the production build:
+## 10. Build and Quality Checks
 
 ```bash
 npm run build
-```
-
-Run ESLint:
-
-```bash
 npm run lint
 ```
 
-Both commands completed successfully during development.
+Both commands completed successfully before deployment. The deployed frontend was subsequently checked manually through the live website.
 
 ## 11. Error Handling and Data Integrity
 
-The application protects data consistency through multiple layers:
-
-- Frontend validation for user input.
-- Backend request validation using Zod.
-- PostgreSQL check constraints for valid financial amounts.
-- Unique constraints and indexes for business references.
-- Foreign keys for relational integrity.
-- Transactional repayment processing.
-- Loan-row locking to prevent concurrent balance inconsistencies.
-
-The database is the final authority for financial correctness, rather than relying solely on frontend calculations.
+Financial correctness is enforced at multiple layers: frontend input handling, backend Zod validation, PostgreSQL foreign keys and check constraints, unique references, and atomic repayment transactions. The database remains the final authority for balances and accepted repayments.
 
 ## 12. Known Limitations and Future Improvements
 
-The current system is a focused assessment implementation.
-
-Potential improvements include:
-
-- Support for multiple staff accounts and role-based permissions.
-- Client and loan search functionality.
-- Pagination and filtering for repayment histories.
-- Reporting and downloadable statements.
-- More comprehensive audit logging.
-- Automated test data cleanup.
-- Separate development, testing, and production environments.
-- Improved accessibility and user interface design.
-- Additional automated tests covering concurrency and authorization.
+- Single authorized staff account rather than multi-user role-based access control.
+- No comprehensive audit log or approval workflow.
+- No automated cleanup for integration test records.
+- No separate automated CI test pipeline or isolated production/staging/test environments.
+- Limited reporting, filtering, and pagination.
+- Additional concurrency, authorization, and negative-input tests would strengthen coverage.
+- Further accessibility, monitoring, backup, and security work would be required for real financial operations.
 
 ## 13. AI Assistance Disclosure
 
-AI assistance was used during development for technical guidance, code generation, troubleshooting, database design discussions, automated test preparation, and documentation drafting.
-
-The implementation was configured, deployed, and tested in the development environment, with manual verification of the client registration, loan creation, and repayment workflows.
-
-The three required automated integration tests were executed successfully against the deployed backend.
-
-AI-generated suggestions were reviewed and adjusted during development, including corrections to environment configuration and test authentication.
+AI assistance was used for architecture discussions, code generation, troubleshooting, database design, automated test preparation, and documentation drafting. Suggested changes were reviewed and adjusted during implementation. The application was manually exercised, deployed to Supabase and Cloudflare Pages, and verified through three passing automated integration tests against the deployed backend.
 
 ## 14. Assessment Summary
 
-This project demonstrates:
+This project demonstrates relational database design, authenticated backend APIs, monetary data handling, transactional repayment integrity, automated integration testing, and deployment of a React frontend on Cloudflare Pages connected to Supabase.
 
-- Relational database design.
-- Backend API development.
-- Financial business-rule validation.
-- Transactional data integrity.
-- Authentication and authorization.
-- Automated integration testing.
-- Frontend and backend integration.
-
-The central design principle is that **financial correctness must be enforced at the database and backend layers, not only in the user interface**.
+**Core principle:** Financial correctness must be enforced by the backend and database, not only by the user interface.
 
 ---
 
-Developed for the Inuka Africa Software Development Internship Technical Assessment.
+Developed for the **Inuka Africa Software Development Internship Technical Assessment**.
